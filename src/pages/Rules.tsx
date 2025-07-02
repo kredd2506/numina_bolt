@@ -1,12 +1,16 @@
 import React, { useState } from 'react';
-import { Plus, Edit, Trash2, Zap, CheckCircle, AlertTriangle, Brain, Code, Play, Pause } from 'lucide-react';
+import { Plus, Edit, Trash2, Zap, CheckCircle, AlertTriangle, Brain, Code, Play, Pause, Settings } from 'lucide-react';
+import { geminiService, type GeneratedRule } from '../services/geminiService';
+import { GeminiConfig } from '../components/GeminiConfig';
 
 export function Rules() {
   const [showCreateForm, setShowCreateForm] = useState(false);
+  const [showGeminiConfig, setShowGeminiConfig] = useState(false);
   const [newRule, setNewRule] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
-  const [generatedRule, setGeneratedRule] = useState(null);
+  const [generatedRule, setGeneratedRule] = useState<GeneratedRule | null>(null);
   const [showRulePreview, setShowRulePreview] = useState(false);
+  const [processingError, setProcessingError] = useState('');
 
   const rules = [
     {
@@ -89,33 +93,32 @@ export function Rules() {
 
   const [rulesList, setRulesList] = useState(rules);
 
-  const simulateAIProcessing = async (instruction) => {
-    setIsProcessing(true);
-    
-    // Simulate AI processing delay
-    await new Promise(resolve => setTimeout(resolve, 2000));
-    
-    // Generate a mock rule based on the instruction
-    const mockRule = {
-      rule_id: instruction.toLowerCase().replace(/[^a-z0-9]/g, '_'),
-      description: `AI-generated rule: ${instruction}`,
-      conditions: [
-        { field: "amount", operator: ">", value: 1000 },
-        { field: "category", operator: "!=", value: "Capital Expenditure" }
-      ],
-      action: "flag",
-      reason: `Flagged based on: ${instruction}`,
-      category: "ai_generated"
-    };
-    
-    setGeneratedRule(mockRule);
-    setIsProcessing(false);
-    setShowRulePreview(true);
-  };
-
   const handleCreateRule = async () => {
-    if (newRule.trim()) {
-      await simulateAIProcessing(newRule);
+    if (!newRule.trim()) return;
+
+    setIsProcessing(true);
+    setProcessingError('');
+    
+    try {
+      // Check if Gemini is configured
+      const configStatus = geminiService.getConfigStatus();
+      if (!configStatus.configured) {
+        setProcessingError(`Gemini AI not configured. Missing: ${configStatus.missing.join(', ')}`);
+        setShowGeminiConfig(true);
+        setIsProcessing(false);
+        return;
+      }
+
+      // Generate rule using Gemini AI
+      const generatedRule = await geminiService.generateRule(newRule);
+      setGeneratedRule(generatedRule);
+      setShowRulePreview(true);
+      
+    } catch (error) {
+      console.error('Error generating rule:', error);
+      setProcessingError(error instanceof Error ? error.message : 'Failed to generate rule');
+    } finally {
+      setIsProcessing(false);
     }
   };
 
@@ -123,14 +126,19 @@ export function Rules() {
     if (generatedRule) {
       const newRuleItem = {
         id: rulesList.length + 1,
-        name: generatedRule.description,
-        description: generatedRule.reason,
+        name: generatedRule.name,
+        description: generatedRule.description,
         naturalLanguage: newRule,
-        status: 'active',
+        status: 'active' as const,
         flagsTriggered: 0,
         lastTriggered: 'Never',
-        accuracy: 100,
-        generatedLogic: generatedRule
+        accuracy: generatedRule.confidence || 100,
+        generatedLogic: {
+          rule_id: generatedRule.rule_id,
+          conditions: generatedRule.conditions,
+          action: generatedRule.action,
+          reason: generatedRule.reason
+        }
       };
       
       setRulesList([...rulesList, newRuleItem]);
@@ -138,10 +146,11 @@ export function Rules() {
       setGeneratedRule(null);
       setShowCreateForm(false);
       setShowRulePreview(false);
+      setProcessingError('');
     }
   };
 
-  const toggleRuleStatus = (id) => {
+  const toggleRuleStatus = (id: number) => {
     setRulesList(rulesList.map(rule => 
       rule.id === id 
         ? { ...rule, status: rule.status === 'active' ? 'paused' : 'active' }
@@ -149,32 +158,72 @@ export function Rules() {
     ));
   };
 
-  const deleteRule = (id) => {
+  const deleteRule = (id: number) => {
     if (confirm('Are you sure you want to delete this rule?')) {
       setRulesList(rulesList.filter(rule => rule.id !== id));
     }
   };
 
-  const testRule = (rule) => {
+  const testRule = (rule: any) => {
     alert(`Testing rule: ${rule.name}\n\nThis would run the rule against recent transactions to validate its effectiveness.`);
   };
 
+  // Check Gemini configuration status
+  const configStatus = geminiService.getConfigStatus();
+
   return (
     <div className="space-y-6">
+      {/* Gemini Configuration Modal */}
+      <GeminiConfig 
+        isOpen={showGeminiConfig} 
+        onClose={() => setShowGeminiConfig(false)} 
+      />
+
       {/* Header */}
       <div className="flex justify-between items-center">
         <div>
           <h1 className="text-3xl font-bold text-gray-900">AI Rules Engine</h1>
-          <p className="mt-2 text-gray-600">Create financial monitoring rules in plain English - powered by advanced AI</p>
+          <p className="mt-2 text-gray-600">Create financial monitoring rules in plain English - powered by Gemini AI</p>
         </div>
-        <button
-          onClick={() => setShowCreateForm(true)}
-          className="inline-flex items-center px-4 py-2 bg-gradient-to-r from-blue-600 to-purple-600 text-white rounded-lg hover:from-blue-700 hover:to-purple-700 transition-all duration-200 shadow-lg hover:shadow-xl"
-        >
-          <Plus className="w-5 h-5 mr-2" />
-          Create AI Rule
-        </button>
+        <div className="flex items-center space-x-3">
+          <button
+            onClick={() => setShowGeminiConfig(true)}
+            className="inline-flex items-center px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors"
+          >
+            <Settings className="w-5 h-5 mr-2" />
+            Configure AI
+          </button>
+          <button
+            onClick={() => setShowCreateForm(true)}
+            className="inline-flex items-center px-4 py-2 bg-gradient-to-r from-blue-600 to-purple-600 text-white rounded-lg hover:from-blue-700 hover:to-purple-700 transition-all duration-200 shadow-lg hover:shadow-xl"
+          >
+            <Plus className="w-5 h-5 mr-2" />
+            Create AI Rule
+          </button>
+        </div>
       </div>
+
+      {/* Configuration Status */}
+      {!configStatus.configured && (
+        <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-4">
+          <div className="flex items-start space-x-3">
+            <AlertTriangle className="w-6 h-6 text-yellow-600 mt-1" />
+            <div>
+              <h3 className="text-lg font-semibold text-yellow-900">Gemini AI Configuration Required</h3>
+              <p className="text-yellow-800 mt-1">
+                To use real AI-powered rule generation, please configure your Gemini AI credentials.
+                Missing: {configStatus.missing.join(', ')}
+              </p>
+              <button
+                onClick={() => setShowGeminiConfig(true)}
+                className="mt-3 px-4 py-2 bg-yellow-600 text-white rounded-lg hover:bg-yellow-700 transition-colors"
+              >
+                Configure Now
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Create Rule Form */}
       {showCreateForm && (
@@ -184,6 +233,12 @@ export function Rules() {
               <Brain className="w-6 h-6 text-white" />
             </div>
             <h3 className="text-lg font-semibold text-gray-900">Create New AI Rule</h3>
+            {configStatus.configured && (
+              <div className="flex items-center space-x-2 text-green-600">
+                <CheckCircle className="w-5 h-5" />
+                <span className="text-sm">Gemini AI Connected</span>
+              </div>
+            )}
           </div>
           
           <div className="space-y-4">
@@ -200,12 +255,24 @@ export function Rules() {
                 disabled={isProcessing}
               />
             </div>
+
+            {processingError && (
+              <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+                <div className="flex items-start space-x-2">
+                  <AlertTriangle className="w-5 h-5 text-red-600 mt-0.5" />
+                  <div>
+                    <p className="text-sm text-red-800 font-medium">Error generating rule:</p>
+                    <p className="text-sm text-red-700">{processingError}</p>
+                  </div>
+                </div>
+              </div>
+            )}
             
             <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
               <h4 className="font-medium text-blue-900 mb-2">How it works:</h4>
               <ol className="text-sm text-blue-800 space-y-1">
-                <li>1. AI interprets your natural language instruction</li>
-                <li>2. Generates structured validation logic</li>
+                <li>1. Gemini AI interprets your natural language instruction</li>
+                <li>2. Generates structured validation logic with confidence scoring</li>
                 <li>3. You review and confirm the generated rule</li>
                 <li>4. Rule is deployed for real-time monitoring</li>
               </ol>
@@ -220,12 +287,12 @@ export function Rules() {
                 {isProcessing ? (
                   <>
                     <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
-                    Processing...
+                    Generating with Gemini AI...
                   </>
                 ) : (
                   <>
                     <Brain className="w-4 h-4 mr-2" />
-                    Generate Rule
+                    Generate with Gemini AI
                   </>
                 )}
               </button>
@@ -235,6 +302,7 @@ export function Rules() {
                   setNewRule('');
                   setGeneratedRule(null);
                   setShowRulePreview(false);
+                  setProcessingError('');
                 }}
                 className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors"
               >
@@ -248,7 +316,7 @@ export function Rules() {
       {/* Rule Preview */}
       {showRulePreview && generatedRule && (
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-          <h3 className="text-lg font-semibold text-gray-900 mb-4">AI-Generated Rule Preview</h3>
+          <h3 className="text-lg font-semibold text-gray-900 mb-4">Gemini AI Generated Rule Preview</h3>
           
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             <div>
@@ -265,12 +333,27 @@ export function Rules() {
               <h4 className="font-medium text-gray-900 mb-2">Rule Summary:</h4>
               <div className="space-y-3">
                 <div className="flex justify-between">
-                  <span className="text-gray-600">Rule ID:</span>
-                  <span className="font-medium">{generatedRule.rule_id}</span>
+                  <span className="text-gray-600">Rule Name:</span>
+                  <span className="font-medium">{generatedRule.name}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-gray-600">Action:</span>
-                  <span className="font-medium capitalize">{generatedRule.action}</span>
+                  <span className="text-gray-600">Category:</span>
+                  <span className="font-medium capitalize">{generatedRule.category}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-600">Severity:</span>
+                  <span className={`font-medium capitalize px-2 py-1 rounded-full text-xs ${
+                    generatedRule.severity === 'critical' ? 'bg-red-100 text-red-800' :
+                    generatedRule.severity === 'warning' ? 'bg-yellow-100 text-yellow-800' :
+                    generatedRule.severity === 'medium' ? 'bg-orange-100 text-orange-800' :
+                    'bg-blue-100 text-blue-800'
+                  }`}>
+                    {generatedRule.severity}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-600">AI Confidence:</span>
+                  <span className="font-medium">{generatedRule.confidence}%</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-gray-600">Conditions:</span>
@@ -422,8 +505,8 @@ export function Rules() {
             <Brain className="w-6 h-6 text-white" />
           </div>
           <div className="flex-1">
-            <h3 className="text-lg font-semibold text-gray-900 mb-4">AI-Suggested Rules</h3>
-            <p className="text-gray-600 mb-4">Based on your transaction patterns, we suggest these additional rules:</p>
+            <h3 className="text-lg font-semibold text-gray-900 mb-4">Gemini AI Suggested Rules</h3>
+            <p className="text-gray-600 mb-4">Based on your transaction patterns, Gemini AI suggests these additional rules:</p>
             <div className="space-y-3">
               {[
                 'Monitor expense reports over $2,500 for required approvals',
@@ -441,7 +524,7 @@ export function Rules() {
                     }}
                     className="text-sm text-blue-600 hover:text-blue-700 font-medium px-3 py-1 rounded-lg hover:bg-blue-50 transition-colors"
                   >
-                    Add Rule
+                    Generate Rule
                   </button>
                 </div>
               ))}
